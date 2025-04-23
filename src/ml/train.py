@@ -59,8 +59,27 @@ class AirQualityModelTrainer:
         """Preprocess the data by handling missing values and converting types."""
         logger.info("Preprocessing data...")
         
-        # Replace -200 with NaN
-        df_clean = df.replace(-200, pd.NA)
+        # Create a copy to avoid warnings
+        df_clean = df.copy()
+        
+        # First, identify numeric columns
+        numeric_columns = ['CO(GT)', 'PT08.S1(CO)', 'NMHC(GT)', 'C6H6(GT)', 
+                          'PT08.S2(NMHC)', 'NOx(GT)', 'PT08.S3(NOx)', 
+                          'NO2(GT)', 'PT08.S4(NO2)', 'PT08.S5(O3)', 
+                          'T', 'RH', 'AH']
+        
+        # Convert columns to numeric, replacing -200 with NaN
+        for col in numeric_columns:
+            if col in df_clean.columns:
+                # Replace comma with dot for decimal conversion
+                if df_clean[col].dtype == 'object':
+                    df_clean[col] = df_clean[col].astype(str).str.replace(',', '.')
+                
+                # Convert to numeric
+                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+                
+                # Replace -200 with NaN
+                df_clean[col] = df_clean[col].replace(-200, np.nan)
         
         # Convert date and time columns
         try:
@@ -78,13 +97,18 @@ class AirQualityModelTrainer:
             )
         
         # Fill missing values
-        df_clean = df_clean.ffill().bfill()
-        
-        # Fill any remaining missing values with column mean
-        numeric_columns = df_clean.select_dtypes(include=['number']).columns
         for col in numeric_columns:
-            if df_clean[col].isna().any():
-                df_clean[col] = df_clean[col].fillna(df_clean[col].mean())
+            if col in df_clean.columns:
+                # Forward fill first
+                df_clean[col] = df_clean[col].fillna(method='ffill')
+                # Then backward fill
+                df_clean[col] = df_clean[col].fillna(method='bfill')
+                # Fill any remaining with mean
+                if df_clean[col].isna().any():
+                    df_clean[col] = df_clean[col].fillna(df_clean[col].mean())
+        
+        # Remove any completely empty columns
+        df_clean = df_clean.dropna(axis=1, how='all')
         
         logger.info(f"Preprocessing complete. Shape: {df_clean.shape}")
         return df_clean
@@ -95,6 +119,11 @@ class AirQualityModelTrainer:
         
         df_features = df.copy()
         
+        # Ensure DateTime is in the correct format
+        if 'DateTime' not in df_features.columns:
+            logger.error("DateTime column missing")
+            return df_features
+        
         # Temporal features
         df_features['hour'] = df_features['DateTime'].dt.hour
         df_features['day'] = df_features['DateTime'].dt.day
@@ -103,19 +132,36 @@ class AirQualityModelTrainer:
         
         # Lag features for the target
         target_col = self.data_config["target_column"]
-        for lag in [1, 3, 6, 12, 24]:
-            df_features[f'{target_col}_lag_{lag}'] = df_features[target_col].shift(lag)
         
-        # Rolling features
-        windows = [3, 6, 12, 24]
-        for window in windows:
-            df_features[f'{target_col}_rolling_mean_{window}'] = df_features[target_col].rolling(window=window).mean()
-            df_features[f'{target_col}_rolling_std_{window}'] = df_features[target_col].rolling(window=window).std()
+        # Ensure target column is numeric
+        if target_col in df_features.columns:
+            df_features[target_col] = pd.to_numeric(df_features[target_col], errors='coerce')
+            
+            for lag in [1, 3, 6, 12, 24]:
+                df_features[f'{target_col}_lag_{lag}'] = df_features[target_col].shift(lag)
+            
+            # Rolling features
+            windows = [3, 6, 12, 24]
+            for window in windows:
+                df_features[f'{target_col}_rolling_mean_{window}'] = (
+                    df_features[target_col].rolling(window=window, min_periods=1).mean()
+                )
+                df_features[f'{target_col}_rolling_std_{window}'] = (
+                    df_features[target_col].rolling(window=window, min_periods=1).std()
+                )
+            
+            # Fill NaN values in rolling std with 0
+            for col in df_features.columns:
+                if 'rolling_std' in col:
+                    df_features[col] = df_features[col].fillna(0)
         
-        # Drop NaN values created by lag features
+        # Drop rows with NaN values in lag features
+        initial_rows = len(df_features)
         df_features = df_features.dropna()
         
+        logger.info(f"Dropped {initial_rows - len(df_features)} rows with NaN values")
         logger.info(f"Features created. Shape: {df_features.shape}")
+        
         return df_features
     
     def prepare_data(self, df: pd.DataFrame):
@@ -138,6 +184,15 @@ class AirQualityModelTrainer:
         
         X = df[available_features]
         y = df[self.data_config["target_column"]]
+        
+        # Ensure all data is numeric
+        X = X.apply(pd.to_numeric, errors='coerce')
+        y = pd.to_numeric(y, errors='coerce')
+        
+        # Drop any remaining rows with NaN
+        mask = ~(X.isna().any(axis=1) | y.isna())
+        X = X[mask]
+        y = y[mask]
         
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(
