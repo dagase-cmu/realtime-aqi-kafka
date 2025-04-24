@@ -13,6 +13,7 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 import mlflow
 import pickle
+import requests
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -28,6 +29,7 @@ class AirQualityConsumer:
     
     def __init__(self):
         """Initialize the consumer with configuration."""
+        self.api_url = "http://127.0.0.1:8000/predict"  # changes with docker
         self.kafka_config = get_config("kafka")
         self.data_config = get_config("data")
         self.mlflow_config = get_config("mlflow")
@@ -90,46 +92,27 @@ class AirQualityConsumer:
                 logger.error("No model available for predictions")
                 self.model = None
     
+
     def process_message(self, message) -> Dict[str, Any]:
-        """
-        Process a Kafka message and make predictions.
-        
-        Args:
-            message: Kafka message
-            
-        Returns:
-            Processed data with predictions
-        """
         try:
-            # Extract the value from the Kafka message
-            data = message.value
-            
-            # Add processing metadata
+            data = message.value  # Extract the actual Kafka message
             data['processed_at'] = datetime.now().isoformat()
-            data['consumer_timestamp'] = datetime.now().timestamp()
-            
-            # Make prediction if model is available
-            if self.model and all(col in data for col in self.data_config["feature_columns"]):
-                features = [data[col] for col in self.data_config["feature_columns"]]
-                features_df = pd.DataFrame([features], columns=self.data_config["feature_columns"])
-                
-                try:
-                    prediction = self.model.predict(features_df)[0]
-                    data['predicted_CO'] = prediction
-                    
-                    # Calculate prediction error if actual value is available
-                    if self.data_config["target_column"] in data:
-                        actual_value = data[self.data_config["target_column"]]
-                        if actual_value is not None:
-                            data['prediction_error'] = abs(actual_value - prediction)
-                            data['percentage_error'] = (abs(actual_value - prediction) / actual_value) * 100 if actual_value != 0 else None
-                
-                except Exception as e:
-                    logger.error(f"Prediction error: {e}")
-                    data['prediction_error'] = None
-            
+
+            try:
+                response = requests.post("http://localhost:8080/predict", json=data)
+                if response.status_code == 200:
+                    prediction = response.json().get("prediction")
+                    data["predicted_CO"] = prediction
+                    logger.info(f"Prediction received: {prediction}")
+                else:
+                    logger.error(f"API error {response.status_code}: {response.text}")
+                    data["predicted_CO"] = None
+            except requests.exceptions.RequestException as api_error:
+                logger.error(f"Failed to reach prediction API: {api_error}")
+                data["predicted_CO"] = None
+
             return data
-            
+
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return None

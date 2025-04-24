@@ -1,34 +1,20 @@
-# docker/Dockerfile.api
-FROM python:3.9-slim
+# Use official Python image
+FROM python:3.11
 
-# Set working directory
+# Set working directory inside the container
 WORKDIR /app
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first
+# Copy requirements file first for caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    pip install flask flask-cors gunicorn
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
-COPY src/ ./src/
-COPY models/ ./models/
-COPY data/ ./data/
+# Copy the rest of the application code
+COPY . .
 
-# Expose API port
+# Expose the port for the Flask API (matches app.py)
 EXPOSE 8080
 
-# Run the API with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "src.api.app:app"]
+# Run the Flask app directly (can be swapped for gunicorn if needed)
+CMD ["python", "src/api/app.py"]

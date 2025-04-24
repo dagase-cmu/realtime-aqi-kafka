@@ -1,7 +1,7 @@
 """
 Enhanced Kafka producer for streaming air quality data with proper error handling and logging.
 """
-
+import os
 import pandas as pd
 import json
 import time
@@ -140,7 +140,8 @@ class AirQualityProducer:
         Returns:
             Loaded dataframe
         """
-        filepath = self.data_config["raw_data_path"]
+        base_dir = os.path.dirname(__file__)
+        filepath = os.path.join(base_dir, "data", "AirQualityUCI.csv")
         logger.info(f"Loading dataset from {filepath}")
         
         try:
