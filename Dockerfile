@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY . .
 
+ENV PYTHONPATH="/app"
+
 # Expose the port for the Flask API (matches app.py)
 EXPOSE 8080
 

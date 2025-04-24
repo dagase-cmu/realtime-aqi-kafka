@@ -2,6 +2,7 @@
 Prediction module for air quality forecasting.
 """
 
+import os
 import sys
 import pandas as pd
 import numpy as np
@@ -35,55 +36,42 @@ class AirQualityPredictor:
         self.feature_engineer = AirQualityFeatureEngineer()
         self.feature_names = None
         
-    def load_model(self, model_name: Optional[str] = None, model_version: Optional[str] = "Production"):
+    def load_model(self):
         """
-        Load model from MLflow registry or local file.
-        
-        Args:
-            model_name: Model name in MLflow registry
-            model_version: Model version (Production, Staging, Latest, or specific version)
+        Load the model from a local file in src/ml/best_model.pkl.
+        Also optionally loads associated scaler and feature names if available.
         """
         try:
-            # First try to load from MLflow
-            if model_name is None:
-                model_name = self.mlflow_config["model_registry_name"]
-            
-            mlflow.set_tracking_uri(self.mlflow_config["tracking_uri"])
-            
-            try:
-                model_uri = f"models:/{model_name}/{model_version}"
-                self.model = mlflow.sklearn.load_model(model_uri)
-                logger.info(f"Loaded model from MLflow: {model_uri}")
-            except Exception as e:
-                logger.warning(f"Failed to load from MLflow: {e}")
-                
-                # Fallback to local file
-                model_path = self.mlflow_config["artifact_path"] / "best_model.pkl"
-                if model_path.exists():
-                    with open(model_path, 'rb') as f:
-                        self.model = pickle.load(f)
-                    logger.info(f"Loaded model from local file: {model_path}")
-                else:
-                    raise FileNotFoundError("No model found in MLflow or local storage")
-            
-            # Load scaler if available
-            scaler_path = self.mlflow_config["artifact_path"] / "scaler.pkl"
-            if scaler_path.exists():
+            base_dir = os.path.dirname(os.path.abspath(__file__))  # path to src/ml/
+            model_path = os.path.join(base_dir, "best_model.pkl")
+            scaler_path = os.path.join(base_dir, "scaler.pkl")
+            feature_names_path = os.path.join(base_dir, "feature_names.json")
+
+            # Load model
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                logger.info(f"Model loaded from local path: {model_path}")
+            else:
+                raise FileNotFoundError(f"Model file not found at: {model_path}")
+
+            # Load optional scaler
+            if os.path.exists(scaler_path):
                 with open(scaler_path, 'rb') as f:
                     self.scaler = pickle.load(f)
-                logger.info("Loaded feature scaler")
-            
-            # Load feature names if available
-            feature_names_path = self.mlflow_config["artifact_path"] / "feature_names.json"
-            if feature_names_path.exists():
+                logger.info("Feature scaler loaded.")
+
+            # Load optional feature names
+            if os.path.exists(feature_names_path):
                 with open(feature_names_path, 'r') as f:
                     self.feature_names = json.load(f)
-                logger.info(f"Loaded feature names: {len(self.feature_names)} features")
-            
+                logger.info(f"Feature names loaded: {len(self.feature_names)} features")
+
         except Exception as e:
-            logger.error(f"Error loading model: {e}")
+            logger.error(f"Error loading local model or artifacts: {e}")
             raise
-    
+
+
     def prepare_features(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
         Prepare features from raw data for prediction.

@@ -29,7 +29,16 @@ class AirQualityConsumer:
     
     def __init__(self):
         """Initialize the consumer with configuration."""
-        self.api_url = "http://127.0.0.1:8000/predict"  # changes with docker
+         # Load feature names
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))  # path to src/kafka
+            features_path = os.path.join(base_dir, "../ml/feature_names.json")
+            with open(features_path, 'r') as f:
+                self.feature_names = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load feature names: {e}")
+            self.feature_names = []
+        self.api_url = "http://127.0.0.1:8080/predict"  # changes with docker
         self.kafka_config = get_config("kafka")
         self.data_config = get_config("data")
         self.mlflow_config = get_config("mlflow")
@@ -99,7 +108,12 @@ class AirQualityConsumer:
             data['processed_at'] = datetime.now().isoformat()
 
             try:
-                response = requests.post("http://localhost:8080/predict", json=data)
+                # Filter out only the expected model features
+                features_only = {key: data[key] for key in self.feature_names if key in data}
+
+                # Send POST request to the API
+                response = requests.post(self.api_url, json=features_only)
+
                 if response.status_code == 200:
                     prediction = response.json().get("prediction")
                     data["predicted_CO"] = prediction
@@ -107,6 +121,7 @@ class AirQualityConsumer:
                 else:
                     logger.error(f"API error {response.status_code}: {response.text}")
                     data["predicted_CO"] = None
+
             except requests.exceptions.RequestException as api_error:
                 logger.error(f"Failed to reach prediction API: {api_error}")
                 data["predicted_CO"] = None
