@@ -42,6 +42,8 @@ class AirQualityConsumer:
         self.kafka_config = get_config("kafka")
         self.data_config = get_config("data")
         self.mlflow_config = get_config("mlflow")
+        self.data_config["api_output_path"] = Path(self.data_config["api_output_path"])
+        self.data_config["processed_data_path"] = Path(self.data_config["processed_data_path"])
         self.consumer = None
         self.model = None
         self.data_buffer = []
@@ -103,58 +105,85 @@ class AirQualityConsumer:
     
 
     def process_message(self, message) -> Dict[str, Any]:
+        data = message.value
+        data['processed_at'] = datetime.now().isoformat()
+
+        # To safely parse timestamp
+        dt_str = data.get("DateTime")
+        if not dt_str:
+            logger.warning("Missing DateTime field in message.")
+            return None
+
+        dt = pd.to_datetime(dt_str)
+        data["hour"], data["day"], data["month"] = dt.hour, dt.day, dt.month
+
+        # Build only the features the model/API expects, using .get to avoid KeyError
+        features_only = {
+            "DateTime": dt_str,
+            "CO(GT)"        : data.get("CO(GT)"),
+            "PT08.S1(CO)"   : data.get("PT08.S1(CO)"),
+            "NMHC(GT)"      : data.get("NMHC(GT)"),
+            "C6H6(GT)"      : data.get("C6H6(GT)"),
+            "T"             : data.get("T"),
+            "RH"            : data.get("RH"),
+            "hour": data.get("hour"),
+            "day": data.get("day"),
+            "month": data.get("month")
+        }
+
+        # Call the prediction API
         try:
-            data = message.value  # Extract the actual Kafka message
-            data['processed_at'] = datetime.now().isoformat()
-
-            try:
-                # Parse DateTime field
-                if "DateTime" in data:
-                    dt = pd.to_datetime(data["DateTime"])
-                    data["hour"] = dt.hour
-                    data["day"] = dt.day
-                    data["month"] = dt.month
-                else:
-                    logger.warning("Missing DateTime field in message.")
-                    return None
-
-                # 2. Build the final API-ready feature set
-                features_only = {
-                    "DateTime": data.get("DateTime"),
-                    "CO(GT)" : data.get("CO(GT)"),
-                    "PT08.S1(CO)": data.get("PT08.S1(CO)"),
-                    "NMHC(GT)": data.get("NMHC(GT)"),
-                    "C6H6(GT)": data.get("C6H6(GT)"),
-                    "T": data.get("T"),
-                    "RH": data.get("RH"),
-                    "hour": data.get("hour"),
-                    "day": data.get("day"),
-                    "month": data.get("month")
-                }
-                # Filter out only the expected model features
-                #features_only = {key: data[key] for key in self.feature_names if key in data}
-
-                # Send POST request to the API
-                logger.info(features_only)
-                response = requests.post(self.api_url, json=features_only)
-
-                if response.status_code == 200:
-                    prediction = response.json().get("prediction")
-                    data["predicted_CO"] = prediction
-                    logger.info(f"Prediction received: {prediction}")
-                else:
-                    logger.error(f"API error {response.status_code}: {response.text}")
-                    data["predicted_CO"] = None
-
-            except requests.exceptions.RequestException as api_error:
-                logger.error(f"Failed to reach prediction API: {api_error}")
+            resp = requests.post(self.api_url, json=features_only)
+            if resp.status_code == 200:
+                result = resp.json()
+                prediction = result.get("prediction")
+                data["predicted_CO"] = prediction
+                logger.info(f"Prediction received: {prediction}")
+            else:
+                logger.error(f"API error {resp.status_code}: {resp.text}")
+                prediction = None
                 data["predicted_CO"] = None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to reach prediction API: {e}")
+            prediction = None
+            data["predicted_CO"] = None
 
-            return data
+        # Saving both features and prediction
+        self.save_api_output(features_only, prediction)
+
+        return data
+
+        
+    def save_api_output(self, features: Dict[str, Any], prediction: Any):
+        try:
+
+            output_path = Path(self.data_config["api_output_path"])
+            output_dir = output_path.parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+        # Prepare data to be saved (features + prediction)
+            output_data = {**features, "predicted_CO": prediction, "processed_at": datetime.now().isoformat()}
+        
+        # Determine file path for saving API output
+            output_dir = self.data_config["api_output_path"].parent
+            output_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
+        
+            output_file = self.data_config["api_output_path"]
+        
+            # Check if the file exists, append if so, else create a new one
+            file_exists = output_file.exists()
+
+            # Append data to the file
+            df = pd.DataFrame([output_data])
+            if file_exists:
+                df.to_csv(output_file, mode='a', header=False, index=False)
+            else:
+                df.to_csv(output_file, index=False)
+
+            logger.info(f"Saved API output to {output_file}")
 
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            return None
+            logger.error(f"Error saving API output: {e}")
+
     
     def save_data(self, data_list: List[Dict[str, Any]]):
         """
@@ -258,7 +287,7 @@ class AirQualityConsumer:
             self.consumer = self.create_consumer()
             
             # Load model
-            self.load_model()
+            # self.load_model()
             
             # Start consuming
             self.consume_data()

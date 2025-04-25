@@ -34,7 +34,8 @@ DATA_CONFIG = {
     ],
     "target_column": "CO(GT)",
     "date_column": "DateTime",
-    "time_column": "Time"
+    "time_column": "Time",
+    "api_output_path": "data/api_output.csv"
 }
 
 # MLflow configuration
