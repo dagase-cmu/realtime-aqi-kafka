@@ -117,12 +117,16 @@ class AirQualityModelTrainer:
         """Create features including temporal and lag features."""
         logger.info("Creating features...")
         
+        if "DateTime" in df.columns:
+            df["DateTime"] = pd.to_datetime(df["DateTime"], errors='coerce')
+            
         df_features = df.copy()
         
         # Ensure DateTime is in the correct format
         if 'DateTime' not in df_features.columns:
             logger.error("DateTime column missing")
             return df_features
+
         
         # Temporal features
         df_features['hour'] = df_features['DateTime'].dt.hour

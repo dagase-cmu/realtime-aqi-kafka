@@ -37,38 +37,31 @@ class AirQualityPredictor:
         self.feature_names = None
         
     def load_model(self):
-        """
-        Load the model from a local file in src/ml/best_model.pkl.
-        Also optionally loads associated scaler and feature names if available.
-        """
+        """Load model, scaler, and feature names from disk (inside src/ml/)."""
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))  # path to src/ml/
+            base_dir = os.path.dirname(os.path.abspath(__file__))  # src/ml
             model_path = os.path.join(base_dir, "best_model.pkl")
             scaler_path = os.path.join(base_dir, "scaler.pkl")
-            feature_names_path = os.path.join(base_dir, "feature_names.json")
+            features_path = os.path.join(base_dir, "feature_names.json")
 
             # Load model
-            if os.path.exists(model_path):
-                with open(model_path, 'rb') as f:
-                    self.model = pickle.load(f)
-                logger.info(f"Model loaded from local path: {model_path}")
-            else:
-                raise FileNotFoundError(f"Model file not found at: {model_path}")
+            with open(model_path, "rb") as f:
+                self.model = pickle.load(f)
+            logger.info(f"Loaded model from {model_path}")
 
-            # Load optional scaler
+            # Load scaler (optional)
             if os.path.exists(scaler_path):
-                with open(scaler_path, 'rb') as f:
+                with open(scaler_path, "rb") as f:
                     self.scaler = pickle.load(f)
-                logger.info("Feature scaler loaded.")
+                logger.info("Loaded feature scaler")
 
-            # Load optional feature names
-            if os.path.exists(feature_names_path):
-                with open(feature_names_path, 'r') as f:
-                    self.feature_names = json.load(f)
-                logger.info(f"Feature names loaded: {len(self.feature_names)} features")
+            # Load feature names
+            with open(features_path, "r") as f:
+                self.feature_names = json.load(f)
+            logger.info(f"Loaded {len(self.feature_names)} feature names")
 
         except Exception as e:
-            logger.error(f"Error loading local model or artifacts: {e}")
+            logger.error(f"Error loading model or metadata: {e}")
             raise
 
 
@@ -111,66 +104,45 @@ class AirQualityPredictor:
         
         return df_features
     
-    def predict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def predict(self, payload: Dict) -> Dict:
         """
-        Make a prediction for a single data point.
-        
-        Args:
-            data: Raw data dictionary
-            
-        Returns:
-            Prediction result with additional metadata
+        Predict air quality from input payload.
+        Ensures payload is aligned with the expected feature schema.
         """
-        if self.model is None:
-            raise ValueError("Model not loaded. Call load_model() first.")
-        
         try:
-            # Prepare features
-            features_df = self.prepare_features(data)
-            
-            # Handle any NaN values
-            features_df = features_df.fillna(method='ffill').fillna(method='bfill')
-            if features_df.isna().any().any():
-                features_df = features_df.fillna(0)
-            
-            # Scale features if scaler is available
+            # Convert input to a DataFrame row
+            df = pd.DataFrame([payload])
+
+            # Ensure all required features are present (add missing as NA)
+            for col in self.feature_names:
+                if col not in df.columns:
+                    df[col] = pd.NA
+
+            # Reorder to match model input exactly
+            df = df[self.feature_names]
+
+            for col in df.columns:
+                if df[col].dtype == "object":
+                    try:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                    except Exception as e:
+                        logger.warning(f"Could not convert column {col} to numeric: {e}")
+
+
+            # Optionally scale features if scaler is used
             if self.scaler:
-                features_scaled = self.scaler.transform(features_df)
+                df_scaled = self.scaler.transform(df)
+                prediction = self.model.predict(df_scaled)[0]
             else:
-                features_scaled = features_df.values
-            
-            # Make prediction
-            prediction = self.model.predict(features_scaled)[0]
-            
-            # Prepare result
-            result = {
-                'predicted_value': float(prediction),
-                'timestamp': datetime.now().isoformat(),
-                'model_version': getattr(self.model, 'version', 'unknown'),
-                'features_used': len(self.feature_names) if self.feature_names else features_df.shape[1]
-            }
-            
-            # Add confidence interval if model supports it
-            if hasattr(self.model, 'predict_proba'):
-                try:
-                    proba = self.model.predict_proba(features_scaled)[0]
-                    result['confidence'] = float(np.max(proba))
-                except Exception:
-                    pass
-            
-            # Add actual value if available for comparison
-            if self.data_config["target_column"] in data:
-                actual_value = data[self.data_config["target_column"]]
-                result['actual_value'] = float(actual_value)
-                result['error'] = float(abs(prediction - actual_value))
-                result['percentage_error'] = float(abs(prediction - actual_value) / actual_value * 100) if actual_value != 0 else None
-            
-            return result
-            
+                prediction = self.model.predict(df)[0]
+
+            return {"prediction": prediction}
+
         except Exception as e:
             logger.error(f"Prediction error: {e}")
             raise
-    
+
+
     def predict_batch(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Make predictions for a batch of data points.

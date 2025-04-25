@@ -108,10 +108,34 @@ class AirQualityConsumer:
             data['processed_at'] = datetime.now().isoformat()
 
             try:
+                # Parse DateTime field
+                if "DateTime" in data:
+                    dt = pd.to_datetime(data["DateTime"])
+                    data["hour"] = dt.hour
+                    data["day"] = dt.day
+                    data["month"] = dt.month
+                else:
+                    logger.warning("Missing DateTime field in message.")
+                    return None
+
+                # 2. Build the final API-ready feature set
+                features_only = {
+                    "DateTime": data.get("DateTime"),
+                    "CO(GT)" : data.get("CO(GT)"),
+                    "PT08.S1(CO)": data.get("PT08.S1(CO)"),
+                    "NMHC(GT)": data.get("NMHC(GT)"),
+                    "C6H6(GT)": data.get("C6H6(GT)"),
+                    "T": data.get("T"),
+                    "RH": data.get("RH"),
+                    "hour": data.get("hour"),
+                    "day": data.get("day"),
+                    "month": data.get("month")
+                }
                 # Filter out only the expected model features
-                features_only = {key: data[key] for key in self.feature_names if key in data}
+                #features_only = {key: data[key] for key in self.feature_names if key in data}
 
                 # Send POST request to the API
+                logger.info(features_only)
                 response = requests.post(self.api_url, json=features_only)
 
                 if response.status_code == 200:

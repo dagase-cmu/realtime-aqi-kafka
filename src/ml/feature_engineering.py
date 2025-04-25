@@ -39,6 +39,9 @@ class AirQualityFeatureEngineer:
         """
         logger.info("Creating temporal features...")
         
+        if "DateTime" in df.columns:
+            df["DateTime"] = pd.to_datetime(df["DateTime"], errors='coerce')
+        
         df_features = df.copy()
         
         # Extract temporal components
