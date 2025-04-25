@@ -284,6 +284,27 @@ class AirQualityPredictor:
         }
         
         return metrics
+    # In your AirQualityPredictor class in predict.py
+
+    def predict_single(self, data: Dict) -> float:
+        """Make a single prediction."""
+        # Prepare the data using the proper method
+        df = self.feature_engineer.prepare_single_prediction(data)
+        
+        # Get the feature names from the feature engineer
+        feature_cols = self.feature_engineer.feature_names
+        
+        # Filter to only available features
+        available_features = [col for col in feature_cols if col in df.columns]
+        X = df[available_features]
+        
+        # Scale features
+        X_scaled = self.scaler.transform(X)
+        
+        # Make prediction
+        prediction = self.model.predict(X_scaled)[0]
+        
+        return prediction
 
 def main():
     """Example usage of the predictor."""
