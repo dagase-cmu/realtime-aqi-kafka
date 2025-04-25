@@ -44,6 +44,14 @@ class AirQualityFeatureEngineer:
         
         df_features = df.copy()
         
+        # Ensure DateTime is in datetime format
+        if 'DateTime' in df_features.columns:
+            df_features['DateTime'] = pd.to_datetime(df_features['DateTime'], errors='coerce')
+            if df_features['DateTime'].isna().any():
+                df_features['DateTime'].fillna(pd.Timestamp.now(), inplace=True)
+        else:
+            raise ValueError("DateTime column not found in DataFrame")
+        
         # Extract temporal components
         df_features['hour'] = df_features['DateTime'].dt.hour
         df_features['day'] = df_features['DateTime'].dt.day
@@ -52,15 +60,7 @@ class AirQualityFeatureEngineer:
         df_features['quarter'] = df_features['DateTime'].dt.quarter
         df_features['is_weekend'] = df_features['dayofweek'].isin([5, 6]).astype(int)
         
-        # Cyclical features for better modeling of periodic patterns
-        df_features['hour_sin'] = np.sin(2 * np.pi * df_features['hour'] / 24)
-        df_features['hour_cos'] = np.cos(2 * np.pi * df_features['hour'] / 24)
-        df_features['month_sin'] = np.sin(2 * np.pi * df_features['month'] / 12)
-        df_features['month_cos'] = np.cos(2 * np.pi * df_features['month'] / 12)
-        
-        logger.info(f"Created {len([col for col in df_features.columns if col not in df.columns])} temporal features")
-        
-        return df_features
+        # ... rest of the method remains the same
     
     def create_lag_features(self, df: pd.DataFrame, target_col: str, lags: List[int] = [1, 3, 6, 12, 24]) -> pd.DataFrame:
         """
@@ -260,3 +260,57 @@ class AirQualityFeatureEngineer:
     def inverse_scale(self, X_scaled: np.ndarray) -> np.ndarray:
         """Inverse transform scaled features."""
         return self.scaler.inverse_transform(X_scaled)
+    
+    # Update the prepare_single_prediction method in AirQualityFeatureEngineer class
+
+    def prepare_single_prediction(self, data: Dict) -> pd.DataFrame:
+        """Prepare a single data point for prediction."""
+        df = pd.DataFrame([data])
+        
+        # Ensure DateTime is properly converted
+        if 'DateTime' in df.columns:
+            df['DateTime'] = pd.to_datetime(df['DateTime'], errors='coerce')
+            # If conversion fails, use current time
+            if df['DateTime'].isna().any():
+                df['DateTime'] = pd.Timestamp.now()
+        else:
+            # If no DateTime column, use current time
+            df['DateTime'] = pd.Timestamp.now()
+        
+        # Now we can safely use .dt accessor
+        df = self.create_temporal_features(df)
+        
+        # For single predictions, we set lag and rolling features to the current value
+        target_col = self.data_config["target_column"]
+        if target_col in df.columns:
+            current_value = df[target_col].iloc[0]
+            
+            # Add lag features
+            for lag in [1, 3, 6, 12, 24]:
+                df[f'{target_col}_lag_{lag}'] = current_value
+            
+            # Add rolling features
+            for window in [3, 6, 12, 24]:
+                df[f'{target_col}_rolling_mean_{window}'] = current_value
+                df[f'{target_col}_rolling_std_{window}'] = 0
+                df[f'{target_col}_rolling_min_{window}'] = current_value
+                df[f'{target_col}_rolling_max_{window}'] = current_value
+            
+            # Add EMA features
+            for alpha in [0.1, 0.3, 0.5, 0.7, 0.9]:
+                df[f'{target_col}_ema_{alpha}'] = current_value
+        
+        # Create interaction features if possible
+        pollutant_cols = ['PT08.S1(CO)', 'PT08.S2(NMHC)', 'PT08.S3(NOx)', 
+                        'PT08.S4(NO2)', 'PT08.S5(O3)']
+        
+        interaction_pairs = []
+        for i, col1 in enumerate(pollutant_cols):
+            for col2 in pollutant_cols[i+1:]:
+                if col1 in df.columns and col2 in df.columns:
+                    interaction_pairs.append((col1, col2))
+        
+        if interaction_pairs:
+            df = self.create_interaction_features(df, interaction_pairs)
+        
+        return df
