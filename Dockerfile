@@ -19,4 +19,4 @@ ENV PYTHONPATH="/app"
 EXPOSE 8080
 
 # Run the Flask app directly (can be swapped for gunicorn if needed)
-CMD ["python", "src/api/app.py"]
+CMD ["python", "src/api/server.py"]
